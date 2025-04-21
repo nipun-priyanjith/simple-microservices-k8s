@@ -15,8 +15,8 @@ pipeline {
     stages {
         stage('Clone Repository') {
             steps {
-                checkout scmGit(branches: [[name: '*/main']],
-                    userRemoteConfigs: [[credentialsId: 'bitbucket_auth', url: 'https://nipunpriyanjith-admin@bitbucket.org/nipunpriyanjith/multi-k8s-project.git']])
+                git branch: 'main',
+                    url: 'https://github.com/nipun-priyanjith/simple-microservices-k8s.git'
             }
         }
 
