@@ -8,7 +8,7 @@ pipeline {
         scannerHome = tool 'Sonar'
         SSH_USER = 'your-ssh-user'
         K8S_HOST = '192.168.88.133'
-        PROJECT_DIR = 'simple-microservices-k8s'
+        // Removed PROJECT_DIR since it's not needed
     }
 
     stages {
@@ -24,7 +24,7 @@ pipeline {
                 script {
                     def SERVICES = ['api-gateway', 'user-service', 'product-service']
                     SERVICES.each { service ->
-                        dir("${PROJECT_DIR}/${service}") {
+                        dir("${service}") {
                             withSonarQubeEnv('Sonar') {
                                 sh """
                                     ${scannerHome}/bin/sonar-scanner \
@@ -49,7 +49,7 @@ pipeline {
 
                         SERVICES.each { service ->
                             def image = "nipunxyz/${service}:${BUILD_NUMBER}"
-                            dir("${PROJECT_DIR}/${service}") {
+                            dir("${service}") {
                                 sh "docker build -t ${image} ."
                                 sh "docker push ${image}"
                             }
@@ -66,7 +66,7 @@ pipeline {
                     withCredentials([usernamePassword(credentialsId: 'k8s-master-password', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
                         SERVICES.each { service ->
                             def image = "nipunxyz/${service}:${BUILD_NUMBER}"
-                            def deploymentFile = "${PROJECT_DIR}/k8s/${service}-deployment.yaml"
+                            def deploymentFile = "k8s/${service}-deployment.yaml"
 
                             sh """
                                 sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no ${deploymentFile} ${USER}@${K8S_HOST}:/home/kube/${service}-deployment.yaml
@@ -79,7 +79,7 @@ pipeline {
                         }
 
                         sh """
-                            sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no ${PROJECT_DIR}/k8s/ingress.yaml ${USER}@${K8S_HOST}:/home/kube/ingress.yaml
+                            sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no k8s/ingress.yaml ${USER}@${K8S_HOST}:/home/kube/ingress.yaml
                             sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
                                 kubectl apply -f /home/kube/ingress.yaml
                             '
