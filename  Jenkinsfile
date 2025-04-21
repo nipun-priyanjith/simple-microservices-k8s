@@ -1,0 +1,104 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_CREDENTIALS_ID = 'dockerhub-credentials-id'
+        SONAR_HOST_URL = 'http://192.168.88.128:9000'
+        SONAR_AUTH_TOKEN = credentials('sonarqube-token-id')
+        scannerHome = tool 'Sonar'
+        SERVICES = ['api-gateway', 'user-service', 'product-service']
+        SSH_USER = 'your-ssh-user'
+        K8S_HOST = '192.168.88.133'
+        PROJECT_DIR = 'simple-microservices-k8s'
+    }
+
+    stages {
+        stage('Clone Repository') {
+            steps {
+                checkout scmGit(branches: [[name: '*/main']],
+                    userRemoteConfigs: [[credentialsId: 'bitbucket_auth', url: 'https://nipunpriyanjith-admin@bitbucket.org/nipunpriyanjith/multi-k8s-project.git']])
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                script {
+                    SERVICES.each { service ->
+                        dir("${PROJECT_DIR}/${service}") {
+                            withSonarQubeEnv('Sonar') {
+                                sh """
+                                    ${scannerHome}/bin/sonar-scanner \
+                                    -Dsonar.projectKey=${service} \
+                                    -Dsonar.projectName=${service} \
+                                    -Dsonar.projectVersion=${BUILD_NUMBER} \
+                                    -Dsonar.sources=.
+                                """
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build & Push Docker Images') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS_ID}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh "echo '${DOCKER_PASS}' | docker login -u '${DOCKER_USER}' --password-stdin"
+
+                        SERVICES.each { service ->
+                            def image = "nipunxyz/${service}:${BUILD_NUMBER}"
+                            dir("${PROJECT_DIR}/${service}") {
+                                sh "docker build -t ${image} ."
+                                sh "docker push ${image}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'k8s-master-password', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    script {
+                        SERVICES.each { service ->
+                            def image = "nipunxyz/${service}:${BUILD_NUMBER}"
+                            def deploymentFile = "${PROJECT_DIR}/k8s/${service}-deployment.yaml"
+
+                            // Copy deployment YAML to remote host and set image
+                            sh """
+                                sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no ${deploymentFile} ${USER}@${K8S_HOST}:/home/kube/${service}-deployment.yaml
+                                sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
+                                    kubectl apply -f /home/kube/${service}-deployment.yaml &&
+                                    kubectl set image deployment/${service} ${service}=${image} --record &&
+                                    kubectl rollout status deployment/${service}
+                                '
+                            """
+                        }
+
+                        // Apply Ingress once after all services are deployed
+                        sh """
+                            sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no ${PROJECT_DIR}/k8s/ingress.yaml ${USER}@${K8S_HOST}:/home/kube/ingress.yaml
+                            sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
+                                kubectl apply -f /home/kube/ingress.yaml
+                            '
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh "docker logout"
+        }
+        success {
+            echo "✅ All services deployed successfully!"
+        }
+        failure {
+            echo "❌ Deployment failed. Please check logs!"
+        }
+    }
+}

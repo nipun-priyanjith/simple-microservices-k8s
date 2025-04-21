@@ -1,0 +1,6 @@
+http://localhost:5000/ → API Gateway
+
+http://localhost:5000/users → Calls user-service
+
+http://localhost:5000/products → Calls product-service
+
