@@ -6,7 +6,6 @@ pipeline {
         SONAR_HOST_URL = 'http://192.168.88.128:9000'
         SONAR_AUTH_TOKEN = credentials('sonarqube-token-id')
         scannerHome = tool 'Sonar'
-        SERVICES = ['api-gateway', 'user-service', 'product-service']
         SSH_USER = 'your-ssh-user'
         K8S_HOST = '192.168.88.133'
         PROJECT_DIR = 'simple-microservices-k8s'
@@ -23,6 +22,7 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 script {
+                    def SERVICES = ['api-gateway', 'user-service', 'product-service']
                     SERVICES.each { service ->
                         dir("${PROJECT_DIR}/${service}") {
                             withSonarQubeEnv('Sonar') {
@@ -43,6 +43,7 @@ pipeline {
         stage('Build & Push Docker Images') {
             steps {
                 script {
+                    def SERVICES = ['api-gateway', 'user-service', 'product-service']
                     withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS_ID}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                         sh "echo '${DOCKER_PASS}' | docker login -u '${DOCKER_USER}' --password-stdin"
 
@@ -60,13 +61,13 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'k8s-master-password', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
-                    script {
+                script {
+                    def SERVICES = ['api-gateway', 'user-service', 'product-service']
+                    withCredentials([usernamePassword(credentialsId: 'k8s-master-password', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
                         SERVICES.each { service ->
                             def image = "nipunxyz/${service}:${BUILD_NUMBER}"
                             def deploymentFile = "${PROJECT_DIR}/k8s/${service}-deployment.yaml"
 
-                            // Copy deployment YAML to remote host and set image
                             sh """
                                 sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no ${deploymentFile} ${USER}@${K8S_HOST}:/home/kube/${service}-deployment.yaml
                                 sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
@@ -77,7 +78,6 @@ pipeline {
                             """
                         }
 
-                        // Apply Ingress once after all services are deployed
                         sh """
                             sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no ${PROJECT_DIR}/k8s/ingress.yaml ${USER}@${K8S_HOST}:/home/kube/ingress.yaml
                             sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
