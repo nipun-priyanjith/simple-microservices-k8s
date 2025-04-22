@@ -65,6 +65,7 @@ pipeline {
                     def SERVICES = ['api-gateway', 'user-service', 'product-service']
                     withCredentials([usernamePassword(credentialsId: 'k8s-master-password', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
 
+                        // Deploy each microservice
                         SERVICES.each { service ->
                             def image = "nipunxyz/${service}:${BUILD_NUMBER}"
                             def deploymentFile = "k8s/${service}-deployment.yaml"
@@ -79,6 +80,7 @@ pipeline {
                             """
                         }
 
+                        // 🛠 Install Ingress Controller using Helm
                         sh """
                             sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no scripts/install-ingress-helm.sh ${USER}@${K8S_HOST}:/home/kube/scripts/install-ingress-helm.sh
                             sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
@@ -88,12 +90,11 @@ pipeline {
                             '
                         """
 
-                        // Updated here: delete then force replace
+                        // 🚀 Apply Ingress YAML
                         sh """
                             sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no k8s/ingress.yaml ${USER}@${K8S_HOST}:/home/kube/ingress.yaml
                             sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
-                                kubectl delete -f /home/kube/ingress.yaml -n ${K8S_NAMESPACE} --ignore-not-found
-                                kubectl replace -f /home/kube/ingress.yaml -n ${K8S_NAMESPACE} --force
+                                kubectl apply -f /home/kube/ingress.yaml -n ${K8S_NAMESPACE}
                             '
                         """
                     }
