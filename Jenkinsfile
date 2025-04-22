@@ -90,10 +90,11 @@ pipeline {
                             '
                         """
 
-                        // 🚀 Apply Ingress YAML
+                        // 🚀 Apply Ingress YAML using delete + apply method
                         sh """
                             sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no k8s/ingress.yaml ${USER}@${K8S_HOST}:/home/kube/ingress.yaml
                             sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
+                                kubectl delete -f /home/kube/ingress.yaml -n ${K8S_NAMESPACE} --ignore-not-found
                                 kubectl apply -f /home/kube/ingress.yaml -n ${K8S_NAMESPACE}
                             '
                         """
