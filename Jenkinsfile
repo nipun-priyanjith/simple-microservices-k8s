@@ -64,6 +64,8 @@ pipeline {
                 script {
                     def SERVICES = ['api-gateway', 'user-service', 'product-service']
                     withCredentials([usernamePassword(credentialsId: 'k8s-master-password', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                        
+                        // Deploy services
                         SERVICES.each { service ->
                             def image = "nipunxyz/${service}:${BUILD_NUMBER}"
                             def deploymentFile = "k8s/${service}-deployment.yaml"
@@ -82,6 +84,34 @@ pipeline {
                             }
                         }
 
+                        // Install Helm (optional, if not already installed)
+                        try {
+                            sh """
+                                sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} 'mkdir -p /home/kube/scripts'
+                                sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no scripts/install-helm.sh ${USER}@${K8S_HOST}:/home/kube/scripts/install-helm.sh
+                                sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} << EOF
+                                    chmod +x /home/kube/scripts/install-helm.sh
+                                    /home/kube/scripts/install-helm.sh
+                                EOF
+                            """
+                        } catch (Exception e) {
+                            error "Helm installation failed: ${e.getMessage()}"
+                        }
+
+                        // 🛠 Install Ingress Controller using Helm
+                        try {
+                            sh """
+                                sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no scripts/install-ingress-helm.sh ${USER}@${K8S_HOST}:/home/kube/scripts/install-ingress-helm.sh
+                                sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} << EOF
+                                    chmod +x /home/kube/scripts/install-ingress-helm.sh
+                                    /home/kube/scripts/install-ingress-helm.sh
+                                EOF
+                            """
+                        } catch (Exception e) {
+                            error "Ingress controller installation failed: ${e.getMessage()}"
+                        }
+
+                        // 🚀 Apply Ingress YAML
                         try {
                             sh """
                                 sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no k8s/ingress.yaml ${USER}@${K8S_HOST}:/home/kube/ingress.yaml
