@@ -27,7 +27,7 @@ pipeline {
                         dir("${service}") {
                             withSonarQubeEnv('Sonar') {
                                 sh """
-                                    ${scannerHome}/bin/sonar-scanner \
+                                    "${scannerHome}/bin/sonar-scanner" \
                                     -Dsonar.projectKey=${service} \
                                     -Dsonar.projectName=${service} \
                                     -Dsonar.projectVersion=${BUILD_NUMBER} \
@@ -65,50 +65,38 @@ pipeline {
                     def SERVICES = ['api-gateway', 'user-service', 'product-service']
                     withCredentials([usernamePassword(credentialsId: 'k8s-master-password', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
 
-                        // Deploy services to Kubernetes
+                        // Deploy each microservice
                         SERVICES.each { service ->
                             def image = "nipunxyz/${service}:${BUILD_NUMBER}"
                             def deploymentFile = "k8s/${service}-deployment.yaml"
 
-                            try {
-                                sh """
-                                    sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no ${deploymentFile} ${USER}@${K8S_HOST}:/home/kube/${service}-deployment.yaml
-                                    sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
-                                        kubectl apply -f /home/kube/${service}-deployment.yaml -n ${K8S_NAMESPACE} &&
-                                        kubectl set image deployment/${service} ${service}=${image} --record -n ${K8S_NAMESPACE} &&
-                                        kubectl rollout status deployment/${service} -n ${K8S_NAMESPACE}
-                                    '
-                                """
-                            } catch (Exception e) {
-                                error "Deployment of ${service} failed: ${e.message}"
-                            }
+                            sh """
+                                sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no ${deploymentFile} ${USER}@${K8S_HOST}:/home/kube/${service}-deployment.yaml
+                                sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
+                                    kubectl apply -f /home/kube/${service}-deployment.yaml -n ${K8S_NAMESPACE}
+                                    kubectl set image deployment/${service} ${service}=${image} --record -n ${K8S_NAMESPACE}
+                                    kubectl rollout status deployment/${service} -n ${K8S_NAMESPACE}
+                                '
+                            """
                         }
 
                         // 🛠 Install Ingress Controller using Helm
-                        try {
-                            sh """
-                                sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no scripts/install-ingress-helm.sh ${USER}@${K8S_HOST}:/home/kube/scripts/install-ingress-helm.sh
-                                sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} << EOF
-                                    export PATH=\$PATH:/usr/local/bin
-                                    chmod +x /home/kube/scripts/install-ingress-helm.sh
-                                    /home/kube/scripts/install-ingress-helm.sh
-                                EOF
-                            """
-                        } catch (Exception e) {
-                            error "Ingress controller installation failed: ${e.getMessage()}"
-                        }
+                        sh """
+                            sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no scripts/install-ingress-helm.sh ${USER}@${K8S_HOST}:/home/kube/scripts/install-ingress-helm.sh
+                            sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
+                                export PATH=\$PATH:/usr/local/bin
+                                chmod +x /home/kube/scripts/install-ingress-helm.sh
+                                /home/kube/scripts/install-ingress-helm.sh
+                            '
+                        """
 
                         // 🚀 Apply Ingress YAML
-                        try {
-                            sh """
-                                sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no k8s/ingress.yaml ${USER}@${K8S_HOST}:/home/kube/ingress.yaml
-                                sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
-                                    kubectl apply -f /home/kube/ingress.yaml -n ${K8S_NAMESPACE}
-                                '
-                            """
-                        } catch (Exception e) {
-                            error "Ingress deployment failed: ${e.message}"
-                        }
+                        sh """
+                            sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no k8s/ingress.yaml ${USER}@${K8S_HOST}:/home/kube/ingress.yaml
+                            sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
+                                kubectl apply -f /home/kube/ingress.yaml -n ${K8S_NAMESPACE}
+                            '
+                        """
                     }
                 }
             }
