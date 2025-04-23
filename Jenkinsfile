@@ -71,8 +71,8 @@ pipeline {
                             def deploymentFile = "k8s/${service}-deployment.yaml"
 
                             sh """
-                                sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no ${deploymentFile} ${USER}@${K8S_HOST}:/home/kube/${service}-deployment.yaml
-                                sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
+                                sshpass -p "$PASS" scp -o StrictHostKeyChecking=no ${deploymentFile} ${USER}@${K8S_HOST}:/home/kube/${service}-deployment.yaml
+                                sshpass -p "$PASS" ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
                                     kubectl apply -f /home/kube/${service}-deployment.yaml -n ${K8S_NAMESPACE}
                                     kubectl set image deployment/${service} ${service}=${image} --record -n ${K8S_NAMESPACE}
                                     kubectl rollout status deployment/${service} -n ${K8S_NAMESPACE}
@@ -82,18 +82,34 @@ pipeline {
 
                         // 🛠 Install Ingress Controller using Helm
                         sh """
-                            sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no scripts/install-ingress-helm.sh ${USER}@${K8S_HOST}:/home/kube/scripts/install-ingress-helm.sh
-                            sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
+                            sshpass -p "$PASS" scp -o StrictHostKeyChecking=no scripts/install-ingress-helm.sh ${USER}@${K8S_HOST}:/home/kube/scripts/install-ingress-helm.sh
+                            sshpass -p "$PASS" ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
                                 export PATH=\$PATH:/usr/local/bin
                                 chmod +x /home/kube/scripts/install-ingress-helm.sh
                                 /home/kube/scripts/install-ingress-helm.sh
                             '
                         """
 
-                        // 🚀 Apply Ingress YAML
+                        // 🚀 Apply Ingress YAML (with webhook wait fix)
                         sh """
-                            sshpass -p '${PASS}' scp -o StrictHostKeyChecking=no k8s/ingress.yaml ${USER}@${K8S_HOST}:/home/kube/ingress.yaml
-                            sshpass -p '${PASS}' ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
+                            sshpass -p "$PASS" scp -o StrictHostKeyChecking=no k8s/ingress.yaml ${USER}@${K8S_HOST}:/home/kube/ingress.yaml
+                            sshpass -p "$PASS" ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
+                                echo "🔄 Waiting for ingress webhook service to be ready..."
+
+                                for i in {1..10}; do
+                                    kubectl get svc ingress-nginx-controller-admission -n ingress-nginx && break
+                                    echo "⏳ Waiting for webhook service... retrying in 5s"
+                                    sleep 5
+                                done
+
+                                echo "✅ Webhook service found. Waiting for ingress controller pod to be ready..."
+
+                                kubectl wait --namespace ingress-nginx \\
+                                  --for=condition=Ready pod \\
+                                  --selector=app.kubernetes.io/component=controller \\
+                                  --timeout=90s
+
+                                echo "🚀 Applying ingress.yaml now..."
                                 kubectl apply -f /home/kube/ingress.yaml -n ${K8S_NAMESPACE}
                             '
                         """
