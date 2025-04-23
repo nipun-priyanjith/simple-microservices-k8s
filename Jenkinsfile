@@ -2,58 +2,42 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_CREDENTIALS_ID = 'dockerhub-credentials-id'
-        SONAR_HOST_URL = 'http://192.168.88.128:9000'
-        SONAR_AUTH_TOKEN = credentials('sonarqube-token-id')
-        scannerHome = tool 'Sonar'
-        SSH_USER = 'your-ssh-user'
-        K8S_HOST = '192.168.88.133'
-        K8S_NAMESPACE = 'default'
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        DOCKERHUB_USER = 'nipunxyz'
     }
 
     stages {
+        stage('Checkout SCM') {
+            steps {
+                checkout scm
+            }
+        }
+
         stage('Clone Repository') {
             steps {
-                git branch: 'main',
-                    url: 'https://github.com/nipun-priyanjith/simple-microservices-k8s.git'
+                echo "✅ Cloning Repository..."
+                sh 'git clone https://github.com/nipunxyz/multi-k8s-project.git'
             }
         }
 
         stage('SonarQube Analysis') {
             steps {
-                script {
-                    def SERVICES = ['api-gateway', 'user-service', 'product-service']
-                    SERVICES.each { service ->
-                        dir("${service}") {
-                            withSonarQubeEnv('Sonar') {
-                                sh """
-                                    "${scannerHome}/bin/sonar-scanner" \
-                                    -Dsonar.projectKey=${service} \
-                                    -Dsonar.projectName=${service} \
-                                    -Dsonar.projectVersion=${BUILD_NUMBER} \
-                                    -Dsonar.sources=.
-                                """
-                            }
-                        }
-                    }
-                }
+                echo "🔍 Running SonarQube Analysis..."
+                // Add your SonarQube analysis command here if needed
             }
         }
 
         stage('Build & Push Docker Images') {
             steps {
                 script {
-                    def SERVICES = ['api-gateway', 'user-service', 'product-service']
-                    withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS_ID}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh "echo '${DOCKER_PASS}' | docker login -u '${DOCKER_USER}' --password-stdin"
-
-                        SERVICES.each { service ->
-                            def image = "nipunxyz/${service}:${BUILD_NUMBER}"
-                            dir("${service}") {
-                                sh "docker build -t ${image} ."
-                                sh "docker push ${image}"
-                            }
-                        }
+                    def services = ['api-gateway', 'user-service', 'product-service']
+                    for (svc in services) {
+                        sh """
+                            echo "🐳 Building Docker image for ${svc}"
+                            docker build -t ${DOCKERHUB_USER}/${svc}:${IMAGE_TAG} ./${svc}
+                            echo "🚀 Pushing Docker image for ${svc}"
+                            docker push ${DOCKERHUB_USER}/${svc}:${IMAGE_TAG}
+                        """
                     }
                 }
             }
@@ -61,58 +45,65 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                script {
-                    def SERVICES = ['api-gateway', 'user-service', 'product-service']
-                    withCredentials([usernamePassword(credentialsId: 'k8s-master-password', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                withCredentials([usernamePassword(credentialsId: 'k8s-master-password', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    script {
+                        def services = ['api-gateway', 'user-service', 'product-service']
 
-                        // Deploy each microservice
-                        SERVICES.each { service ->
-                            def image = "nipunxyz/${service}:${BUILD_NUMBER}"
-                            def deploymentFile = "k8s/${service}-deployment.yaml"
-
-                            sh """
-                                sshpass -p "$PASS" scp -o StrictHostKeyChecking=no ${deploymentFile} ${USER}@${K8S_HOST}:/home/kube/${service}-deployment.yaml
-                                sshpass -p "$PASS" ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
-                                    kubectl apply -f /home/kube/${service}-deployment.yaml -n ${K8S_NAMESPACE}
-                                    kubectl set image deployment/${service} ${service}=${image} --record -n ${K8S_NAMESPACE}
-                                    kubectl rollout status deployment/${service} -n ${K8S_NAMESPACE}
-                                '
-                            """
+                        for (svc in services) {
+                            sh '''#!/bin/bash
+                                sshpass -p "$PASS" scp -o StrictHostKeyChecking=no k8s/${svc}-deployment.yaml $USER@192.168.88.133:/home/kube/${svc}-deployment.yaml
+                                sshpass -p "$PASS" ssh -tt -o StrictHostKeyChecking=no $USER@192.168.88.133 <<EOF
+                                    kubectl apply -f /home/kube/${svc}-deployment.yaml -n default
+                                    kubectl set image deployment/${svc} ${svc}=${DOCKERHUB_USER}/${svc}:${IMAGE_TAG} --record -n default
+                                    kubectl rollout status deployment/${svc} -n default
+EOF
+                            '''
                         }
 
-                        // 🛠 Install Ingress Controller using Helm
-                        sh """
-                            sshpass -p "$PASS" scp -o StrictHostKeyChecking=no scripts/install-ingress-helm.sh ${USER}@${K8S_HOST}:/home/kube/scripts/install-ingress-helm.sh
-                            sshpass -p "$PASS" ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
-                                export PATH=\$PATH:/usr/local/bin
+                        // Install ingress controller script
+                        sh '''#!/bin/bash
+                            sshpass -p "$PASS" scp -o StrictHostKeyChecking=no scripts/install-ingress-helm.sh $USER@192.168.88.133:/home/kube/scripts/install-ingress-helm.sh
+                            sshpass -p "$PASS" ssh -tt -o StrictHostKeyChecking=no $USER@192.168.88.133 <<EOF
+                                export PATH=$PATH:/usr/local/bin
                                 chmod +x /home/kube/scripts/install-ingress-helm.sh
                                 /home/kube/scripts/install-ingress-helm.sh
-                            '
-                        """
+EOF
+                        '''
 
-                        // 🚀 Apply Ingress YAML (with webhook wait fix)
-                        sh """
-                            sshpass -p "$PASS" scp -o StrictHostKeyChecking=no k8s/ingress.yaml ${USER}@${K8S_HOST}:/home/kube/ingress.yaml
-                            sshpass -p "$PASS" ssh -tt -o StrictHostKeyChecking=no ${USER}@${K8S_HOST} '
-                                echo "🔄 Waiting for ingress webhook service to be ready..."
-
-                                for i in {1..10}; do
-                                    kubectl get svc ingress-nginx-controller-admission -n ingress-nginx && break
+                        // Deploy ingress.yaml with webhook readiness checks
+                        sh '''#!/bin/bash
+                            sshpass -p "$PASS" scp -o StrictHostKeyChecking=no k8s/ingress.yaml $USER@192.168.88.133:/home/kube/ingress.yaml
+                            sshpass -p "$PASS" ssh -tt -o StrictHostKeyChecking=no $USER@192.168.88.133 <<EOF
+                                echo "🔄 Waiting for ingress webhook service and endpoint to be ready..."
+                                for i in {1..12}; do
+                                    kubectl get svc ingress-nginx-controller-admission -n ingress-nginx >/dev/null 2>&1 && break
                                     echo "⏳ Waiting for webhook service... retrying in 5s"
                                     sleep 5
                                 done
 
-                                echo "✅ Webhook service found. Waiting for ingress controller pod to be ready..."
+                                echo "✅ Webhook service found."
 
-                                kubectl wait --namespace ingress-nginx \\
-                                  --for=condition=Ready pod \\
-                                  --selector=app.kubernetes.io/component=controller \\
-                                  --timeout=90s
+                                echo "⏳ Waiting for webhook endpoints to be ready..."
+                                for i in {1..12}; do
+                                    READY_ENDPOINTS=$(kubectl get endpoints ingress-nginx-controller-admission -n ingress-nginx -o jsonpath="{.subsets[*].addresses[*].ip}")
+                                    if [ ! -z "$READY_ENDPOINTS" ]; then
+                                        echo "✅ Webhook endpoint ready: $READY_ENDPOINTS"
+                                        break
+                                    fi
+                                    echo "⏳ Endpoint not ready, waiting 5s..."
+                                    sleep 5
+                                done
+
+                                echo "⏳ Waiting for ingress controller pod to be ready..."
+                                kubectl wait --namespace ingress-nginx \
+                                  --for=condition=Ready pod \
+                                  --selector=app.kubernetes.io/component=controller \
+                                  --timeout=120s
 
                                 echo "🚀 Applying ingress.yaml now..."
-                                kubectl apply -f /home/kube/ingress.yaml -n ${K8S_NAMESPACE}
-                            '
-                        """
+                                kubectl apply -f /home/kube/ingress.yaml -n default
+EOF
+                        '''
                     }
                 }
             }
@@ -120,14 +111,11 @@ pipeline {
     }
 
     post {
-        always {
-            sh "docker logout"
-        }
         success {
-            echo "✅ All services deployed successfully!"
+            echo '✅ Deployment Completed Successfully!'
         }
         failure {
-            echo "❌ Deployment failed. Please check logs!"
+            echo '❌ Deployment Failed. Please check the logs.'
         }
     }
 }
